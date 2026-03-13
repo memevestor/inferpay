@@ -25,11 +25,38 @@ export async function getWalletBalance(walletId: string): Promise<Result<string>
   }
 }
 
+export async function sendUsdcTransfer(
+  fromWalletId: string,
+  toAddress: string,
+  amountUsdc: string
+): Promise<Result<{ txId: string }>> {
+  try {
+    const client = makeClient();
+    const tokenId = process.env.USDC_TOKEN_ID;
+    if (!tokenId) return { ok: false, error: "USDC_TOKEN_ID not configured" };
+
+    const res = await client.createTransaction({
+      walletId: fromWalletId,
+      tokenId,
+      destinationAddress: toAddress,
+      amount: [amountUsdc],
+      fee: { type: "level", config: { feeLevel: "MEDIUM" } },
+    });
+
+    const txId = res.data?.id;
+    if (!txId) return { ok: false, error: "No transaction ID returned" };
+
+    return { ok: true, data: { txId } };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
 export async function validateNanopayment(
   paymentHeader: string,
   expectedAmount: string,
   merchantAddress: string
-): Promise<Result<{ payer: string; amount: string }>> {
+): Promise<Result<{ payer: string; amount: string; txId: string | null }>> {
   // Circle Nanopayments validation: parse the X-Payment header (EIP-3009 signed auth)
   // Header format: base64-encoded JSON containing { signature, from, to, value, validAfter, validBefore, nonce }
   try {

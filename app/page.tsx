@@ -33,7 +33,6 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [payStep, setPayStep] = useState<PayStep>("idle");
-  const [paymentHeader, setPaymentHeader] = useState("");
   const [txLogs, setTxLogs] = useState<TxRow[]>([]);
   const [balance, setBalance] = useState<string | null>(null);
 
@@ -68,38 +67,37 @@ export default function Home() {
     setLoading(true);
     setPayStep("sending");
 
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (paymentHeader) {
-      headers["X-Payment"] = paymentHeader;
-      setPayStep("retrying");
-    }
-
-    const res = await fetch("/api/v1/chat/completions", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ model, messages: newMessages }),
-    });
-
-    if (res.status === 402) {
+    try {
+      // Animate through the x402 steps visually
+      await new Promise((r) => setTimeout(r, 200));
       setPayStep("got402");
-      const data = await res.json();
-      setMessages([
-        ...newMessages,
-        {
-          role: "assistant",
-          content: `⚠️ 402 Payment Required\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\`\n\nPaste your X-Payment header below and retry.`,
-        },
-      ]);
-    } else if (res.ok) {
-      setPayStep("done");
-      const data = await res.json();
-      const reply = data.choices?.[0]?.message?.content ?? "(no response)";
-      setMessages([...newMessages, { role: "assistant", content: reply }]);
-      await Promise.all([fetchTxLogs(), fetchBalance()]);
-    } else {
+      await new Promise((r) => setTimeout(r, 200));
+      setPayStep("retrying");
+
+      const res = await fetch("/api/v1/demo/try", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, messages: newMessages }),
+      });
+
+      if (res.status === 429) {
+        setPayStep("error");
+        const data = await res.json();
+        const secs = Math.max(0, (data.resetAt ?? 0) - Math.floor(Date.now() / 1000));
+        setMessages([...newMessages, { role: "assistant", content: `Rate limit exceeded. Try again in ${secs}s.` }]);
+      } else if (res.ok) {
+        setPayStep("done");
+        const data = await res.json();
+        setMessages([...newMessages, { role: "assistant", content: data.llm_response ?? "(no response)" }]);
+        await Promise.all([fetchTxLogs(), fetchBalance()]);
+      } else {
+        setPayStep("error");
+        const err = await res.json().catch(() => ({ error: "Unknown error" }));
+        setMessages([...newMessages, { role: "assistant", content: `Error: ${err.error}` }]);
+      }
+    } catch (e) {
       setPayStep("error");
-      const err = await res.text();
-      setMessages([...newMessages, { role: "assistant", content: `Error: ${err}` }]);
+      setMessages([...newMessages, { role: "assistant", content: `Error: ${String(e)}` }]);
     }
 
     setLoading(false);
@@ -186,15 +184,6 @@ export default function Home() {
         <span className="bg-green-900/40 text-green-600 px-2 py-0.5 rounded">200 + LLM</span>
       </div>
 
-      {/* X-Payment header input */}
-      <input
-        type="text"
-        placeholder="X-Payment header (paste signed auth to skip 402)"
-        value={paymentHeader}
-        onChange={(e) => setPaymentHeader(e.target.value)}
-        className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-xs text-gray-400 font-mono"
-      />
-
       {/* Input + Pay & Ask button */}
       <div className="flex gap-2">
         <input
@@ -245,16 +234,15 @@ export default function Home() {
                 <span className="text-gray-400 truncate flex-1">
                   {tx.model.split("/")[1] ?? tx.model}
                 </span>
-                {tx.tx_hash ? (
-                  <span
-                    className="text-gray-500 font-mono shrink-0"
-                    title={tx.tx_hash}
-                  >
-                    {tx.tx_hash.slice(0, 8)}…
-                  </span>
-                ) : (
-                  <span className="text-gray-700 font-mono shrink-0">—</span>
-                )}
+                <a
+                  href={`https://testnet.arcscan.app/address/${tx.payer}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-500 hover:text-blue-400 font-mono shrink-0 transition-colors"
+                  title={`Payer: ${tx.payer}`}
+                >
+                  {tx.payer.slice(0, 6)}…{tx.payer.slice(-4)} ↗
+                </a>
                 <span
                   className={`shrink-0 ${
                     tx.status === "confirmed" ? "text-green-500" : "text-yellow-500"

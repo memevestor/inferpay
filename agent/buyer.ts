@@ -31,7 +31,7 @@ async function signPayment(paymentInfo: PaymentRequired): Promise<string> {
     walletId: process.env.BUYER_WALLET_ID!,
     tokenId: process.env.USDC_TOKEN_ID!,
     destinationAddress: paymentInfo.payTo,
-    amounts: [paymentInfo.amount],
+    amount: [paymentInfo.amount],
     fee: { type: "level", config: { feeLevel: "MEDIUM" } },
   });
 

@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { getPriceForModel } from "@/lib/pricing";
 import { build402Response, extractPaymentHeader } from "@/lib/nanopay";

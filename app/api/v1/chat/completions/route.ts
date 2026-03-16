@@ -72,12 +72,15 @@ export async function POST(req: NextRequest) {
   const parsed = extractPaymentHeader(req.headers);
 
   // Step 1: no payment header → return 402 with x402 v2 requirements
+  // GatewayClient reads the PAYMENT-REQUIRED header (base64 of body), not just the body.
   if (!parsed.ok) {
     const resourceUrl = req.nextUrl.href;
-    return NextResponse.json(build402ResponseBody(requirements, resourceUrl), {
+    const body402 = build402ResponseBody(requirements, resourceUrl);
+    const encoded = Buffer.from(JSON.stringify(body402)).toString("base64");
+    return NextResponse.json(body402, {
       status: 402,
       headers: {
-        "X-Payment-Required": "true",
+        "PAYMENT-REQUIRED": encoded,
         "Access-Control-Allow-Origin": "*",
       },
     });
@@ -126,6 +129,11 @@ export async function POST(req: NextRequest) {
   const responseHeaders = new Headers();
   responseHeaders.set("Content-Type", upstream.headers.get("Content-Type") ?? "application/json");
   responseHeaders.set("Access-Control-Allow-Origin", "*");
+  // GatewayClient reads PAYMENT-RESPONSE to extract transaction hash
+  responseHeaders.set(
+    "PAYMENT-RESPONSE",
+    Buffer.from(JSON.stringify({ transaction: settleResult.transaction })).toString("base64")
+  );
 
   return new NextResponse(upstream.body, {
     status: upstream.status,
@@ -139,7 +147,7 @@ export async function OPTIONS() {
     headers: {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, X-Payment",
+      "Access-Control-Allow-Headers": "Content-Type, X-Payment, Payment-Signature",
     },
   });
 }

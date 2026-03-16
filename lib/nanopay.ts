@@ -64,12 +64,13 @@ export function build402ResponseBody(requirements: unknown, resourceUrl: string)
   };
 }
 
-// Returns the raw X-Payment header string — passed directly to BatchFacilitatorClient.verify/settle
+// GatewayClient sends payment in "Payment-Signature" header (base64 JSON).
+// Passed directly to BatchFacilitatorClient.verify/settle — no manual decoding needed.
 export function extractPaymentHeader(
   headers: Headers
 ): { ok: true; raw: string } | { ok: false; error: string } {
-  const raw = headers.get("X-Payment") ?? headers.get("x-payment");
-  if (!raw) return { ok: false, error: "Missing X-Payment header" };
+  const raw = headers.get("Payment-Signature") ?? headers.get("payment-signature");
+  if (!raw) return { ok: false, error: "Missing Payment-Signature header" };
   return { ok: true, raw };
 }
 

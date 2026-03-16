@@ -5,6 +5,9 @@ import { GatewayClient } from "@circle-fin/x402-batching/client";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getPriceForModel, MODEL_PRICES } from "@/lib/pricing";
 import type { ChatMessage } from "@/lib/llm";
+import { insertTransaction, updateTxHash } from "@/lib/db";
+import { lookupOnchainTxHash } from "@/lib/arcscan";
+import { usdcToAtomic, getUsdcAddress } from "@/lib/nanopay";
 
 const MERCHANT_ADDRESS = process.env.CIRCLE_WALLET_ADDRESS!;
 
@@ -152,6 +155,19 @@ export async function POST(req: NextRequest) {
   });
 
   const totalMs = Date.now() - startMs;
+
+  // Log transaction + async resolve UUID → real onchain hash
+  const txId = insertTransaction({
+    payer: buyer.address,
+    model,
+    amount_usdc: price,
+    tx_hash: payResult.transaction,
+  });
+  void (async () => {
+    const usdcAddr = await getUsdcAddress().catch(() => "");
+    const hash = await lookupOnchainTxHash(buyer.address, usdcToAtomic(price), usdcAddr);
+    if (hash) updateTxHash(txId, hash);
+  })();
 
   return NextResponse.json(
     {

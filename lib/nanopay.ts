@@ -21,10 +21,16 @@ async function getArcKind(): Promise<SupportedKind> {
 }
 
 // "0.001" → "1000" (USDC 6 decimals, bigint arithmetic — no float)
-function usdcToAtomic(price: string): string {
+export function usdcToAtomic(price: string): string {
   const [whole = "0", frac = ""] = price.split(".");
   const padded = frac.padEnd(6, "0").slice(0, 6);
   return (BigInt(whole) * 1_000_000n + BigInt(padded)).toString();
+}
+
+export async function getUsdcAddress(): Promise<string> {
+  const arcKind = await getArcKind();
+  const assets = arcKind.extra?.assets as Array<{ address: string }> | undefined;
+  return assets?.[0]?.address ?? "";
 }
 
 export async function buildPaymentRequirements(

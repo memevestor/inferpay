@@ -243,6 +243,24 @@ export default function Home() {
                 >
                   {tx.payer.slice(0, 6)}…{tx.payer.slice(-4)} ↗
                 </a>
+                {tx.tx_hash?.startsWith("0x") ? (
+                  <a
+                    href={`https://testnet.arcscan.app/tx/${tx.tx_hash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-emerald-600 hover:text-emerald-400 font-mono text-xs shrink-0 transition-colors"
+                    title={tx.tx_hash}
+                  >
+                    {tx.tx_hash.slice(0, 8)}…{tx.tx_hash.slice(-6)} ↗
+                  </a>
+                ) : (
+                  <span
+                    className="text-gray-700 font-mono text-xs shrink-0"
+                    title={tx.tx_hash ?? ""}
+                  >
+                    {tx.tx_hash ? tx.tx_hash.slice(0, 8) + "…" : "—"}
+                  </span>
+                )}
                 <span
                   className={`shrink-0 ${
                     tx.status === "confirmed" ? "text-green-500" : "text-yellow-500"

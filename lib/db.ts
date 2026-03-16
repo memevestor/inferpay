@@ -38,12 +38,18 @@ export type TxRecord = {
   status?: string;
 };
 
-export function insertTransaction(rec: TxRecord): void {
-  if (!db) return;
-  db.prepare(
+export function insertTransaction(rec: TxRecord): number {
+  if (!db) return -1;
+  const result = db.prepare(
     `INSERT INTO transactions (payer, model, amount_usdc, tx_hash, status)
      VALUES (?, ?, ?, ?, ?)`
   ).run(rec.payer, rec.model, rec.amount_usdc, rec.tx_hash ?? null, rec.status ?? "confirmed");
+  return Number(result.lastInsertRowid);
+}
+
+export function updateTxHash(id: number, txHash: string): void {
+  if (!db || id < 0) return;
+  db.prepare("UPDATE transactions SET tx_hash = ? WHERE id = ?").run(txHash, id);
 }
 
 export function listTransactions(limit = 50): unknown[] {

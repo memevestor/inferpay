@@ -24,7 +24,11 @@ AI proxy that accepts USDC nanopayments via Circle Nanopayments (x402 standard) 
 ```
 inferpay/
 ├── app/
-│   ├── api/v1/chat/completions/  # x402 proxy endpoint
+│   ├── api/v1/chat/completions/  # x402 v2 proxy endpoint (production)
+│   ├── api/v1/demo/try/          # Demo endpoint (GatewayClient buyer)
+│   ├── api/v1/demo/balance/      # Demo buyer balances
+│   ├── api/transactions/         # Admin transaction log (x-admin-token required)
+│   ├── api/balance/              # Merchant balance
 │   ├── api/health/               # healthcheck
 │   ├── landing/                  # Landing page (SEPARATE AGENT — do not touch)
 │   │   ├── page.tsx
@@ -32,16 +36,16 @@ inferpay/
 │   ├── components/landing/       # Landing components (SEPARATE AGENT — do not touch)
 │   └── page.tsx                  # playground UI
 ├── lib/
-│   ├── circle.ts                 # Circle SDK init, wallet ops, payment validation
-│   ├── nanopay.ts                # x402 flow: 402 response, EIP-3009 validation
+│   ├── nanopay.ts                # x402 v2: buildPaymentRequirements, verify, settle, extractPaymentHeader
 │   ├── pricing.ts                # model → price mapping
 │   ├── llm.ts                    # OpenRouter proxy logic
-│   └── db.ts                     # SQLite schema + queries
+│   ├── db.ts                     # SQLite schema + queries
+│   └── rate-limit.ts             # In-memory rate limiter
 ├── agent/
-│   ├── buyer.ts                  # Demo buyer agent (autonomous)
-│   └── signer.ts                 # EIP-3009 signature helper
+│   └── buyer-v2.ts               # Autonomous GatewayClient buyer (5 paid requests)
 ├── scripts/
-│   └── setup.sh                  # One-click: create wallet, get faucet USDC
+│   ├── check-balance.ts          # Check Gateway/wallet balances
+│   └── test-nanopay.ts           # Quick payment test
 ├── CLAUDE.md
 └── .env.local                    # Never commit
 ```
@@ -53,27 +57,35 @@ npm run dev          # Start Next.js dev server on port 3000
 npm run build        # Production build
 npm run lint         # ESLint + TypeScript check
 npm run test         # Run vitest
-npm run setup        # Create Circle wallet + fund from faucet
 
 # Test the proxy manually:
-curl -X POST http://localhost:3000/api/v1/chat/completions \
+curl -si -X POST http://localhost:3000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"meta-llama/llama-3.1-70b-instruct","messages":[{"role":"user","content":"hello"}]}'
-# Expected: 402 Payment Required with x402 payment instructions
+# Expected: 402 with PAYMENT-REQUIRED header (base64 JSON)
 
-# Run demo buyer agent:
-npx tsx agent/buyer.ts
+# Run autonomous GatewayClient buyer agent (5 paid requests):
+npx tsx agent/buyer-v2.ts
+
+# Check admin transaction log:
+curl -H "x-admin-token: $ADMIN_TOKEN" http://localhost:3000/api/transactions
 ```
 
 ## Environment Variables (.env.local)
 
 ```
-CIRCLE_API_KEY=           # From https://console.circle.com
-CIRCLE_ENTITY_SECRET=     # Generated during setup
-CIRCLE_WALLET_ADDRESS=    # Merchant wallet on ARC-TESTNET
-CIRCLE_WALLET_BLOCKCHAIN=ARC-TESTNET
-OPENROUTER_API_KEY=       # From https://openrouter.ai
+CIRCLE_API_KEY=              # From https://console.circle.com
+CIRCLE_ENTITY_SECRET=        # Generated in Circle console
+CIRCLE_WALLET_ADDRESS=       # Merchant wallet address on Arc Testnet (public payTo address)
+OPENROUTER_API_KEY=          # From https://openrouter.ai
 DATABASE_PATH=./data/inferpay.db
+
+BUYER_PRIVATE_KEY=0x...      # EOA private key for buyer agent (NOT Circle Entity Secret)
+DEMO_BUYER_PRIVATE_KEY=0x... # EOA private key for /api/v1/demo/try (pre-funded Gateway)
+ADMIN_TOKEN=                 # Random hex — protects /api/transactions endpoint
+
+# Optional
+INFERPAY_INTERNAL_URL=http://localhost:3000  # Internal URL for demo self-requests (default: http://localhost:3000)
 ```
 
 ## Architecture: x402 Payment Flow (Nanopayments v0.2)
@@ -90,19 +102,19 @@ Two payment paths:
 7. Server proxies to OpenRouter → returns LLM response
 8. Transaction logged to SQLite with settlement_type="batched"
 
-**Demo (Direct transfer — our wallets):**
-1. POST to `/api/v1/demo/try` → no wallet needed
-2. Server uses pre-funded Demo Buyer wallet (Dev-Controlled Wallets)
-3. Direct USDC transfer via Circle SDK
-4. Same LLM proxy flow
-5. Transaction logged with settlement_type="demo"
+**Demo (GatewayClient buyer — real x402 v2 flow):**
+1. POST to `/api/v1/demo/try` → no wallet needed from user
+2. Server uses pre-funded Demo Buyer EOA (`DEMO_BUYER_PRIVATE_KEY`)
+3. `GatewayClient.pay()` runs full 402 → sign EIP-3009 → settle flow
+4. Self-requests to `http://localhost:3000/api/v1/chat/completions` (via `INFERPAY_INTERNAL_URL`)
+5. Returns `{ steps[], llm_response, tx_hash, mode: "demo" }`
 
 ## Coding Conventions
 
 - Named exports only, no default exports (except Next.js pages/routes)
 - Use `unknown` + type narrowing, never `any`
 - Error handling: return `{ ok, data, error }` result objects, not try/catch in business logic
-- Wrap Circle SDK calls in try/catch at the boundary layer only (`lib/circle.ts`)
+- Wrap Circle SDK calls in try/catch at the boundary layer only (`lib/nanopay.ts`)
 - All prices in string format (USDC decimals), never float arithmetic
 - Use `bigint` for any onchain amounts
 - Comments only for WHY, never for WHAT
@@ -111,9 +123,10 @@ Two payment paths:
 
 ## Nanopayments SDK Patterns
 
-IMPORTANT: Two SDKs in this project:
-1. `@circle-fin/x402-batching` — Nanopayments (production payment path)
-2. `@circle-fin/developer-controlled-wallets` — Legacy (demo endpoint only)
+IMPORTANT: One SDK for payments:
+1. `@circle-fin/x402-batching` — Nanopayments (both production and demo payment paths)
+
+`@circle-fin/developer-controlled-wallets` is installed but NOT used for payments — it's a legacy dependency.
 
 **Seller (our server) — verify and settle:**
 
@@ -152,20 +165,7 @@ const result = await buyer.pay(url, fetchOptions);
 - `accepts[].extra.verifyingContract` — from CHAIN_CONFIGS
 Without these, buyer SDK won't recognize it as Nanopayments endpoint.
 
-## Circle Dev-Controlled Wallets (LEGACY — demo only)
-
-Used ONLY in `/api/v1/demo/try` for the pre-funded demo flow. Do not use for production payment path.
-
-```typescript
-import { initiateDeveloperControlledWalletsClient } from "@circle-fin/developer-controlled-wallets";
-
-const client = initiateDeveloperControlledWalletsClient({
-  apiKey: process.env.CIRCLE_API_KEY!,
-  entitySecret: process.env.CIRCLE_ENTITY_SECRET!,
-});
-```
-
-## x402 / Nanopayments Flow
+## x402 v2 / Nanopayments Flow
 
 - Production payment path uses `@circle-fin/x402-batching` SDK — NOT custom parsing
 - Buyer signs EIP-3009 `transferWithAuthorization` offchain (zero gas)
@@ -173,7 +173,7 @@ const client = initiateDeveloperControlledWalletsClient({
 - Server settles via `BatchFacilitatorClient.settle()` — batched, gas-free
 - Settlement happens in bulk onchain later — seller gets instant confirmation
 - Replay protection: Gateway checks nonce — `nonce_already_used` error on replay
-- If Nanopayments SDK unavailable: demo endpoint falls back to Dev-Controlled Wallets (direct transfer)
+- Demo endpoint uses `GatewayClient.pay()` — same SDK, same x402 v2 flow, just a pre-funded EOA
 
 ## Pricing (lib/pricing.ts)
 
@@ -183,7 +183,6 @@ export const MODEL_PRICES: Record<string, string> = {
   "meta-llama/llama-3.1-70b-instruct": "0.001",
   "anthropic/claude-sonnet-4.6": "0.005",
   "openai/gpt-4o": "0.008",
-  "anthropic/claude-opus-4.6": "0.01",
 };
 ```
 

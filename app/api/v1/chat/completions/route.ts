@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Step 2: verify payment cryptographically via Circle Gateway API
-  const verifyResult = await verifyPayment(parsed.raw, requirements);
+  const verifyResult = await verifyPayment(parsed.payload, requirements);
   if (!verifyResult.ok) {
     return NextResponse.json(
       { error: "Payment verification failed" },
@@ -96,7 +96,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Step 3: settle (submit to batch queue — instant confirmation, gas-free)
-  const settleResult = await settlePayment(parsed.raw, requirements);
+  const settleResult = await settlePayment(parsed.payload, requirements);
   if (!settleResult.ok) {
     return NextResponse.json(
       { error: "Payment settlement failed" },

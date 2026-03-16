@@ -64,22 +64,27 @@ export function build402ResponseBody(requirements: unknown, resourceUrl: string)
   };
 }
 
-// GatewayClient sends payment in "Payment-Signature" header (base64 JSON).
-// Passed directly to BatchFacilitatorClient.verify/settle — no manual decoding needed.
+// GatewayClient sends payment in "Payment-Signature" header (base64-encoded JSON object).
+// BatchFacilitatorClient.verify/settle expect the decoded object, not the raw string.
 export function extractPaymentHeader(
   headers: Headers
-): { ok: true; raw: string } | { ok: false; error: string } {
+): { ok: true; payload: unknown } | { ok: false; error: string } {
   const raw = headers.get("Payment-Signature") ?? headers.get("payment-signature");
   if (!raw) return { ok: false, error: "Missing Payment-Signature header" };
-  return { ok: true, raw };
+  try {
+    const payload = JSON.parse(Buffer.from(raw, "base64").toString("utf-8"));
+    return { ok: true, payload };
+  } catch {
+    return { ok: false, error: "Invalid Payment-Signature header" };
+  }
 }
 
 export async function verifyPayment(
-  raw: string,
+  payload: unknown,
   requirements: unknown
 ): Promise<{ ok: true; payer: string } | { ok: false; error: string }> {
   const result = await facilitator.verify(
-    raw as never,
+    payload as never,
     requirements as never
   );
   if (!result.isValid) {
@@ -89,11 +94,11 @@ export async function verifyPayment(
 }
 
 export async function settlePayment(
-  raw: string,
+  payload: unknown,
   requirements: unknown
 ): Promise<{ ok: true; payer: string; transaction: string } | { ok: false; error: string }> {
   const result = await facilitator.settle(
-    raw as never,
+    payload as never,
     requirements as never
   );
   if (!result.success) {

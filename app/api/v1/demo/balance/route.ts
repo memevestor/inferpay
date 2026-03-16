@@ -1,33 +1,28 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { getWalletBalance } from "@/lib/circle";
+import { GatewayClient } from "@circle-fin/x402-batching/client";
 
 export async function GET() {
-  const walletId = process.env.DEMO_BUYER_WALLET_ID;
-  const address = process.env.DEMO_BUYER_WALLET_ADDRESS;
+  const privateKey = process.env.DEMO_BUYER_PRIVATE_KEY as `0x${string}` | undefined;
 
-  if (!walletId || !address) {
+  if (!privateKey) {
     return NextResponse.json(
       { error: "Demo wallet not configured" },
       { status: 503, headers: { "Access-Control-Allow-Origin": "*" } }
     );
   }
 
-  const result = await getWalletBalance(walletId);
-  if (!result.ok) {
-    return NextResponse.json(
-      { error: result.error },
-      { status: 503, headers: { "Access-Control-Allow-Origin": "*" } }
-    );
-  }
+  const buyer = new GatewayClient({ chain: "arcTestnet", privateKey });
+  const balances = await buyer.getBalances();
 
   return NextResponse.json(
     {
-      address,
-      balance_usdc: parseFloat(result.data).toFixed(6),
+      address: buyer.address,
+      wallet_balance_usdc: balances.wallet.formatted,
+      gateway_balance_usdc: balances.gateway.formattedAvailable,
       network: "ARC-TESTNET",
-      note: "Demo buyer wallet balance. Refilled from faucet when low.",
+      note: "Demo buyer Gateway wallet balance. Refilled from faucet when low.",
     },
     { headers: { "Access-Control-Allow-Origin": "*" } }
   );

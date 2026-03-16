@@ -2,8 +2,13 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getPriceForModel } from "@/lib/pricing";
-import { build402Response, extractPaymentHeader } from "@/lib/nanopay";
-import { validateNanopayment } from "@/lib/circle";
+import {
+  buildPaymentRequirements,
+  build402ResponseBody,
+  extractPaymentHeader,
+  verifyPayment,
+  settlePayment,
+} from "@/lib/nanopay";
 import { proxyToOpenRouter } from "@/lib/llm";
 import { insertTransaction } from "@/lib/db";
 
@@ -33,12 +38,14 @@ export async function POST(req: NextRequest) {
   }
 
   const price = getPriceForModel(model);
-  const paymentHeader = extractPaymentHeader(req.headers);
+  const requirements = await buildPaymentRequirements(price, MERCHANT_ADDRESS);
 
-  // Step 1: no payment header → return 402
-  if (!paymentHeader) {
-    const payment402 = build402Response(price, MERCHANT_ADDRESS, `Inference: ${model}`);
-    return NextResponse.json(payment402, {
+  const parsed = extractPaymentHeader(req.headers);
+
+  // Step 1: no payment header → return 402 with x402 v2 requirements
+  if (!parsed.ok) {
+    const resourceUrl = req.nextUrl.href;
+    return NextResponse.json(build402ResponseBody(requirements, resourceUrl), {
       status: 402,
       headers: {
         "X-Payment-Required": "true",
@@ -47,15 +54,25 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Step 2: validate payment
-  const validation = await validateNanopayment(paymentHeader, price, MERCHANT_ADDRESS);
-  if (!validation.ok) {
-    return NextResponse.json({ error: validation.error }, { status: 402 });
+  // Step 2: verify payment cryptographically via Circle Gateway API
+  const verifyResult = await verifyPayment(parsed.raw, requirements);
+  if (!verifyResult.ok) {
+    return NextResponse.json(
+      { error: "Payment verification failed", reason: verifyResult.error },
+      { status: 402 }
+    );
   }
 
-  const { payer, amount, txId } = validation.data;
+  // Step 3: settle (submit to batch queue — instant confirmation, gas-free)
+  const settleResult = await settlePayment(parsed.raw, requirements);
+  if (!settleResult.ok) {
+    return NextResponse.json(
+      { error: "Payment settlement failed", reason: settleResult.error },
+      { status: 500 }
+    );
+  }
 
-  // Step 3: proxy to OpenRouter
+  // Step 4: proxy to LLM
   const llmResult = await proxyToOpenRouter({
     model,
     messages: messages as never,
@@ -68,10 +85,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: llmResult.error }, { status: 502 });
   }
 
-  // Step 4: log transaction
-  insertTransaction({ payer, model, amount_usdc: amount, tx_hash: txId ?? undefined });
+  // Step 5: log transaction
+  insertTransaction({
+    payer: settleResult.payer,
+    model,
+    amount_usdc: price,
+    tx_hash: settleResult.transaction,
+  });
 
-  // Stream or return response as-is
   const upstream = llmResult.data;
   const responseHeaders = new Headers();
   responseHeaders.set("Content-Type", upstream.headers.get("Content-Type") ?? "application/json");

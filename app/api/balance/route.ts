@@ -1,17 +1,19 @@
 import { NextResponse } from "next/server";
-import { getWalletBalance } from "@/lib/circle";
+import { GatewayClient } from "@circle-fin/x402-batching/client";
 
-// Returns buyer wallet USDC balance for the playground demo
+// Returns demo buyer Gateway balance for the playground UI
 export async function GET() {
-  const walletId = process.env.BUYER_WALLET_ID;
-  if (!walletId) {
-    return NextResponse.json({ error: "BUYER_WALLET_ID not configured" }, { status: 500 });
+  const privateKey = process.env.DEMO_BUYER_PRIVATE_KEY as `0x${string}` | undefined;
+  if (!privateKey) {
+    return NextResponse.json({ error: "DEMO_BUYER_PRIVATE_KEY not configured" }, { status: 500 });
   }
 
-  const result = await getWalletBalance(walletId);
-  if (!result.ok) {
-    return NextResponse.json({ error: result.error }, { status: 503 });
-  }
+  const buyer = new GatewayClient({ chain: "arcTestnet", privateKey });
+  const balances = await buyer.getBalances();
 
-  return NextResponse.json({ balance: result.data });
+  return NextResponse.json({
+    address: buyer.address,
+    wallet_balance: balances.wallet.formatted,
+    gateway_balance: balances.gateway.formattedAvailable,
+  });
 }

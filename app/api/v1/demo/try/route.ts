@@ -1,17 +1,12 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
+import { GatewayClient } from "@circle-fin/x402-batching/client";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getPriceForModel, MODEL_PRICES } from "@/lib/pricing";
-import { build402Response } from "@/lib/nanopay";
-import { sendUsdcTransfer, getWalletBalance } from "@/lib/circle";
-import { proxyToOpenRouter } from "@/lib/llm";
-import { insertTransaction } from "@/lib/db";
 import type { ChatMessage } from "@/lib/llm";
 
 const MERCHANT_ADDRESS = process.env.CIRCLE_WALLET_ADDRESS!;
-const DEMO_BUYER_ADDRESS = process.env.DEMO_BUYER_WALLET_ADDRESS!;
-const DEMO_BUYER_WALLET_ID = process.env.DEMO_BUYER_WALLET_ID!;
 
 const LIMIT = 5;
 const WINDOW_MS = 60_000;
@@ -23,7 +18,6 @@ function getIp(req: NextRequest): string {
     "unknown"
   );
 }
-
 
 export async function POST(req: NextRequest) {
   // Rate limit
@@ -70,10 +64,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "messages must be a non-empty array" }, { status: 400 });
   }
 
-  if (!DEMO_BUYER_ADDRESS || !DEMO_BUYER_WALLET_ID) {
+  const privateKey = process.env.DEMO_BUYER_PRIVATE_KEY as `0x${string}` | undefined;
+  if (!privateKey) {
     return NextResponse.json(
-      { error: "Demo mode not configured. DEMO_BUYER_WALLET_ID/ADDRESS missing." },
-      { status: 503 }
+      { error: "Demo mode not configured. DEMO_BUYER_PRIVATE_KEY missing." },
+      { status: 503, headers: { "Access-Control-Allow-Origin": "*" } }
     );
   }
 
@@ -81,90 +76,78 @@ export async function POST(req: NextRequest) {
   const steps: object[] = [];
   const startMs = Date.now();
 
-  // ── Step 1: request (simulate 402) ──────────────────────────────────────
-  const payment402 = build402Response(price, MERCHANT_ADDRESS, `Inference: ${model}`);
+  // ── Step 1: show what the 402 challenge looks like ───────────────────────
   steps.push({
     step: "request",
     description: "POST to /api/v1/chat/completions without payment",
     status: 402,
     timestamp: new Date().toISOString(),
     data: {
-      amount: payment402.amount,
-      payTo: payment402.payTo,
-      price_usdc: price,
+      amount_usdc: price,
+      payTo: MERCHANT_ADDRESS,
     },
   });
 
-  // ── Step 2: real USDC transfer via Circle ────────────────────────────────
-  const balResult = await getWalletBalance(DEMO_BUYER_WALLET_ID);
-  if (balResult.ok && parseFloat(balResult.data) < parseFloat(price) * 2) {
+  // ── Step 2: GatewayClient pays via real x402 Nanopayments flow ───────────
+  const buyer = new GatewayClient({ chain: "arcTestnet", privateKey });
+
+  const balances = await buyer.getBalances();
+  if (balances.gateway.available === 0n) {
     return NextResponse.json(
       {
-        error: "Demo wallet is low on funds. Try again later.",
-        balance_usdc: balResult.data,
+        error: "Demo wallet Gateway balance is empty. Try again later.",
+        gateway_balance_usdc: balances.gateway.formattedAvailable,
       },
       { status: 503, headers: { "Access-Control-Allow-Origin": "*" } }
     );
   }
 
-  const transfer = await sendUsdcTransfer(DEMO_BUYER_WALLET_ID, MERCHANT_ADDRESS, price);
-  if (!transfer.ok) {
+  // buyer.pay() fires the full 402 → sign EIP-3009 → settle flow
+  const inferUrl = `${req.nextUrl.origin}/api/v1/chat/completions`;
+
+  type OpenAIResponse = {
+    choices?: { message?: { content?: string } }[];
+    usage?: { total_tokens?: number };
+  };
+
+  let payResult: Awaited<ReturnType<typeof buyer.pay<OpenAIResponse>>>;
+  try {
+    payResult = await buyer.pay<OpenAIResponse>(inferUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, messages }),
+    });
+  } catch (e) {
     return NextResponse.json(
-      { error: `Demo payment failed: ${transfer.error}` },
-      { status: 500 }
+      { error: `Demo payment failed: ${String(e)}` },
+      { status: 500, headers: { "Access-Control-Allow-Origin": "*" } }
     );
   }
 
-  const payer = DEMO_BUYER_ADDRESS;
-  const amount = price;
-  const txId = transfer.data.txId;
   steps.push({
     step: "payment",
-    description: "Demo buyer signs and sends USDC payment",
+    description: "Demo buyer signs EIP-3009 authorization and settles via Circle Gateway",
     status: "completed",
     timestamp: new Date().toISOString(),
     data: {
-      from: payer,
+      from: buyer.address,
       to: MERCHANT_ADDRESS,
-      amount_usdc: amount,
-      tx_hash: txId,
+      amount_usdc: payResult.formattedAmount,
+      tx_hash: payResult.transaction,
     },
   });
 
-  // ── Step 3: LLM inference ────────────────────────────────────────────────
-  const llmResult = await proxyToOpenRouter({ model, messages });
-  if (!llmResult.ok) {
-    return NextResponse.json(
-      { error: `LLM error: ${llmResult.error}` },
-      { status: 503 }
-    );
-  }
-
-  let llmJson: { choices?: { message?: { content?: string } }[]; usage?: { total_tokens?: number } };
-  try {
-    llmJson = await llmResult.data.json();
-  } catch {
-    return NextResponse.json({ error: "Failed to parse LLM response" }, { status: 502 });
-  }
-
-  const llmResponse = llmJson.choices?.[0]?.message?.content ?? "(no response)";
-  const tokensUsed = llmJson.usage?.total_tokens ?? 0;
+  // ── Step 3: LLM response ─────────────────────────────────────────────────
+  const llmJson = payResult.data;
+  const llmResponse = llmJson?.choices?.[0]?.message?.content ?? "(no response)";
+  const tokensUsed = llmJson?.usage?.total_tokens ?? 0;
 
   steps.push({
     step: "response",
     description: "LLM inference delivered",
-    status: 200,
+    status: payResult.status,
     timestamp: new Date().toISOString(),
     data: { model, tokens_used: tokensUsed },
-  });
-
-  // ── Log to SQLite ────────────────────────────────────────────────────────
-  insertTransaction({
-    payer,
-    model,
-    amount_usdc: amount,
-    tx_hash: txId ?? undefined,
-    status: "demo",
   });
 
   const totalMs = Date.now() - startMs;
@@ -175,9 +158,9 @@ export async function POST(req: NextRequest) {
       llm_response: llmResponse,
       total_time_ms: totalMs,
       price_usdc: price,
-      tx_hash: txId,
+      tx_hash: payResult.transaction,
       mode: "demo",
-      note: "This demo used a pre-funded testnet wallet. In production, YOUR agent pays.",
+      note: "This demo used a pre-funded testnet Gateway wallet. In production, YOUR agent pays.",
     },
     { headers: { "Access-Control-Allow-Origin": "*" } }
   );

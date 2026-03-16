@@ -42,7 +42,7 @@ function Nav() {
 
 // ─── HeroBadge ────────────────────────────────────────────────────────────────
 
-export function HeroBadge() {
+function HeroBadge() {
   return (
     <div className="inline-flex items-center gap-2 border border-gray-800 rounded-full px-3.5 py-1">
       {/* green dot signals live testnet status */}
@@ -57,7 +57,7 @@ export function HeroBadge() {
 // ─── CodeBlock ───────────────────────────────────────────────────────────────
 // Shows the full 3-step x402 flow so developers immediately understand the protocol
 
-export function CodeBlock() {
+function CodeBlock() {
   return (
     <div className="border border-gray-800 rounded-lg overflow-hidden">
       {/* Fake macOS title bar to ground this visually as a terminal */}
@@ -226,7 +226,7 @@ interface FeatureCardProps {
   tag: string;
 }
 
-export function FeatureCard({ icon, title, body, tag }: FeatureCardProps) {
+function FeatureCard({ icon, title, body, tag }: FeatureCardProps) {
   return (
     <div className="border border-gray-800 rounded-lg p-6 flex flex-col gap-4">
       <div className="w-9 h-9 border border-gray-800 rounded-lg flex items-center justify-center bg-gray-900">
@@ -247,7 +247,7 @@ export function FeatureCard({ icon, title, body, tag }: FeatureCardProps) {
 
 // ─── FeaturesRow ─────────────────────────────────────────────────────────────
 
-export function FeaturesRow() {
+function FeaturesRow() {
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
       <FeatureCard
@@ -382,7 +382,7 @@ function AgentCard({ icon, title, desc }: AgentCardProps) {
   );
 }
 
-export function AgentEconomy() {
+function AgentEconomy() {
   return (
     <section className="max-w-6xl mx-auto px-6 py-16">
       <div className="mb-10">
@@ -469,7 +469,7 @@ function RoadmapItem({ version, title, desc, badge, active }: RoadmapItemProps) 
   );
 }
 
-export function Roadmap() {
+function Roadmap() {
   return (
     <section className="max-w-6xl mx-auto px-6 py-16">
       <div className="mb-10">
@@ -588,7 +588,7 @@ function PricingCard({ model, provider, price }: PricingCardProps) {
   );
 }
 
-export function Pricing() {
+function Pricing() {
   const models: PricingCardProps[] = [
     {
       model: "meta-llama/llama-3.1-70b-instruct",
@@ -662,7 +662,7 @@ export function Pricing() {
 // ─── HowItWorks ──────────────────────────────────────────────────────────────
 // Condensed numbered steps so developers can scan the protocol at a glance
 
-export function HowItWorks() {
+function HowItWorks() {
   const steps = [
     {
       n: "01",
@@ -715,7 +715,7 @@ export function HowItWorks() {
 
 // ─── Footer ───────────────────────────────────────────────────────────────────
 
-export function Footer() {
+function Footer() {
   return (
     <footer className="border-t border-gray-800 mt-24">
       <div className="max-w-6xl mx-auto px-6 py-10">

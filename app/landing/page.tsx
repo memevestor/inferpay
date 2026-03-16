@@ -8,7 +8,7 @@ import { Integration } from "./Integration";
 
 // ─── Nav ─────────────────────────────────────────────────────────────────────
 
-export function Nav() {
+function Nav() {
   return (
     <header className="border-b border-gray-800">
       <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">

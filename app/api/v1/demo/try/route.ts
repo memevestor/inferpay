@@ -102,8 +102,9 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // buyer.pay() fires the full 402 → sign EIP-3009 → settle flow
-  const inferUrl = `${req.nextUrl.origin}/api/v1/chat/completions`;
+  // buyer.pay() fires the full 402 → sign EIP-3009 → settle flow.
+  // Use internal URL (http://localhost:3000) to avoid SSL issues on self-requests.
+  const inferUrl = `${process.env.INFERPAY_INTERNAL_URL ?? "http://localhost:3000"}/api/v1/chat/completions`;
 
   type OpenAIResponse = {
     choices?: { message?: { content?: string } }[];

@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { getPriceForModel } from "@/lib/pricing";
+import { getPriceForModel, MODEL_PRICES } from "@/lib/pricing";
 import {
   buildPaymentRequirements,
   build402ResponseBody,
@@ -11,10 +11,32 @@ import {
 } from "@/lib/nanopay";
 import { proxyToOpenRouter } from "@/lib/llm";
 import { insertTransaction } from "@/lib/db";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 const MERCHANT_ADDRESS = process.env.CIRCLE_WALLET_ADDRESS!;
 
+// 60 requests per minute per IP — generous for legit buyers, throttles spam on the 402 path
+const RATE_LIMIT = 60;
+const RATE_WINDOW_MS = 60_000;
+
+function getIp(req: NextRequest): string {
+  return (
+    req.headers.get("x-real-ip") ??
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    "unknown"
+  );
+}
+
 export async function POST(req: NextRequest) {
+  const ip = getIp(req);
+  const rl = checkRateLimit(ip, RATE_LIMIT, RATE_WINDOW_MS);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: "Too many requests", resetAt: Math.floor(rl.resetAt / 1000) },
+      { status: 429, headers: { "Access-Control-Allow-Origin": "*" } }
+    );
+  }
+
   let body: unknown;
   try {
     body = await req.json();
@@ -35,6 +57,13 @@ export async function POST(req: NextRequest) {
 
   if (typeof model !== "string") {
     return NextResponse.json({ error: "model must be a string" }, { status: 400 });
+  }
+
+  if (!(model in MODEL_PRICES)) {
+    return NextResponse.json(
+      { error: `Unknown model. Supported: ${Object.keys(MODEL_PRICES).join(", ")}` },
+      { status: 400 }
+    );
   }
 
   const price = getPriceForModel(model);
@@ -58,7 +87,7 @@ export async function POST(req: NextRequest) {
   const verifyResult = await verifyPayment(parsed.raw, requirements);
   if (!verifyResult.ok) {
     return NextResponse.json(
-      { error: "Payment verification failed", reason: verifyResult.error },
+      { error: "Payment verification failed" },
       { status: 402 }
     );
   }
@@ -67,7 +96,7 @@ export async function POST(req: NextRequest) {
   const settleResult = await settlePayment(parsed.raw, requirements);
   if (!settleResult.ok) {
     return NextResponse.json(
-      { error: "Payment settlement failed", reason: settleResult.error },
+      { error: "Payment settlement failed" },
       { status: 500 }
     );
   }
@@ -82,7 +111,7 @@ export async function POST(req: NextRequest) {
   });
 
   if (!llmResult.ok) {
-    return NextResponse.json({ error: llmResult.error }, { status: 502 });
+    return NextResponse.json({ error: "LLM unavailable" }, { status: 502 });
   }
 
   // Step 5: log transaction

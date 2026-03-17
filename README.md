@@ -193,7 +193,7 @@ Pricing is flat per request. Prices are testnet/decorative — USDC is faucet-fu
 | `/api/v1/chat/completions` | POST | Payment-Signature header | Production x402 v2 proxy |
 | `/api/v1/demo/try` | POST | None (rate limited 5/min) | Demo flow with pre-funded GatewayClient |
 | `/api/v1/demo/balance` | GET | None | Demo buyer wallet + gateway balance |
-| `/api/transactions` | GET | `x-admin-token` header | Recent transaction log (admin only) |
+| `/api/transactions` | GET | None | Recent transaction log (public, read-only) |
 | `/api/balance` | GET | None | Merchant wallet + gateway balance |
 | `/api/health` | GET | None | Health check |
 
@@ -325,7 +325,7 @@ BUYER_PRIVATE_KEY=0x...            # Any EOA with USDC deposited to Circle Gatew
 # Demo endpoint (same format as BUYER_PRIVATE_KEY)
 DEMO_BUYER_PRIVATE_KEY=0x...       # Pre-funded EOA for /api/v1/demo/try
 
-# Admin token for /api/transactions
+# Admin token — reserved for future admin endpoints
 ADMIN_TOKEN=                       # Random 32-byte hex — set via: openssl rand -hex 32
 
 # Optional: override internal URL for demo self-requests (default: http://localhost:3000)
@@ -350,7 +350,7 @@ InferPay uses **Circle Nanopayments (x402 v2)** — full cryptographic payment v
 
 - IP rate limiting: 60 req/min on production endpoint, 5 req/min on demo
 - Model whitelist: unknown models rejected with 400
-- `/api/transactions` requires `x-admin-token` header
+- `/api/transactions` is public read-only (blockchain data: payer address, model, amount, tx hash — no private data)
 - UFW firewall on VPS: only ports 22, 80, 443 open
 - SSH: key-only auth, password auth disabled
 

@@ -67,8 +67,8 @@ curl -si -X POST http://localhost:3000/api/v1/chat/completions \
 # Run autonomous GatewayClient buyer agent (5 paid requests):
 npx tsx agent/buyer-v2.ts
 
-# Check admin transaction log:
-curl -H "x-admin-token: $ADMIN_TOKEN" http://localhost:3000/api/transactions
+# Check transaction log (public):
+curl http://localhost:3000/api/transactions | jq .
 ```
 
 ## Environment Variables (.env.local)
@@ -82,7 +82,7 @@ DATABASE_PATH=./data/inferpay.db
 
 BUYER_PRIVATE_KEY=0x...      # EOA private key for buyer agent (NOT Circle Entity Secret)
 DEMO_BUYER_PRIVATE_KEY=0x... # EOA private key for /api/v1/demo/try (pre-funded Gateway)
-ADMIN_TOKEN=                 # Random hex — protects /api/transactions endpoint
+ADMIN_TOKEN=                 # Random hex — reserved for future admin endpoints (not currently used)
 
 # Optional
 INFERPAY_INTERNAL_URL=http://localhost:3000  # Internal URL for demo self-requests (default: http://localhost:3000)
@@ -264,7 +264,7 @@ Checks to run before every deploy and after any dependency update:
 - `/api/transactions` is intentionally public (blockchain data) — only payer address, model, amount, tx hash. No private data
 - `/api/v1/demo/try` is rate-limited (5 req/min per IP) — prevents demo wallet drain
 - `/api/v1/chat/completions` is rate-limited (60 req/min per IP) — prevents spam on the 402 path
-- No admin endpoints are publicly accessible without `ADMIN_TOKEN`
+- No sensitive admin endpoints should be publicly accessible without `ADMIN_TOKEN` (reserved for future use)
 
 **Dependencies:**
 - Run `npm audit` periodically — pay attention to high/critical severity in `@circle-fin/*` and `next`

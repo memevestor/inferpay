@@ -239,27 +239,27 @@ export default function Home() {
                 <span className="text-gray-400 truncate flex-1">
                   {tx.model.split("/")[1] ?? tx.model}
                 </span>
-                <a
-                  href={`https://testnet.arcscan.app/address/${tx.payer}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-blue-500 hover:text-blue-400 font-mono shrink-0 transition-colors"
+                <span
+                  className="text-gray-500 font-mono shrink-0"
                   title={`Payer: ${tx.payer}`}
                 >
-                  {tx.payer.slice(0, 6)}…{tx.payer.slice(-4)} ↗
-                </a>
+                  {tx.payer.slice(0, 6)}…{tx.payer.slice(-4)}
+                </span>
                 {tx.tx_hash?.startsWith("0x") ? (
                   <a
                     href={`https://testnet.arcscan.app/tx/${tx.tx_hash}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-emerald-500 hover:text-emerald-400 font-mono text-xs shrink-0 transition-colors"
+                    className="text-blue-500 hover:text-blue-400 font-mono text-xs shrink-0 transition-colors"
                     title={tx.tx_hash}
                   >
-                    {tx.tx_hash.slice(0, 8)}…{tx.tx_hash.slice(-6)} ↗
+                    {tx.tx_hash.slice(0, 10)}…{tx.tx_hash.slice(-6)} ↗
                   </a>
                 ) : (
-                  <span className="text-gray-600 text-xs shrink-0" title="Batch settlement pending on-chain">
+                  <span
+                    className="text-gray-600 text-xs shrink-0"
+                    title="Circle batch settlement pending — link appears once confirmed on-chain"
+                  >
                     ⏳ settling
                   </span>
                 )}

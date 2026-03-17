@@ -11,8 +11,7 @@ import {
 } from "@/lib/nanopay";
 import { proxyToOpenRouter } from "@/lib/llm";
 import { insertTransaction, updateTxHash } from "@/lib/db";
-import { lookupOnchainTxHash } from "@/lib/arcscan";
-import { usdcToAtomic, getUsdcAddress } from "@/lib/nanopay";
+import { lookupSettlementTxHash } from "@/lib/arcscan";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 const MERCHANT_ADDRESS = process.env.CIRCLE_WALLET_ADDRESS!;
@@ -127,12 +126,11 @@ export async function POST(req: NextRequest) {
     tx_hash: settleResult.transaction,
   });
 
-  // Async: resolve Circle UUID → real onchain 0x hash (Arc sub-second finality, ~3s delay)
-  void (async () => {
-    const usdcAddr = await getUsdcAddress().catch(() => "");
-    const hash = await lookupOnchainTxHash(settleResult.payer, usdcToAtomic(price), usdcAddr);
+  // Async: wait for next submitBatch cycle (~5 min) then resolve UUID → real onchain 0x hash
+  const createdAt = new Date().toISOString().replace("T", " ").slice(0, 19);
+  void lookupSettlementTxHash(createdAt).then((hash) => {
     if (hash) updateTxHash(txId, hash);
-  })();
+  });
 
   const upstream = llmResult.data;
   const responseHeaders = new Headers();

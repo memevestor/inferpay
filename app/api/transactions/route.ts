@@ -7,6 +7,7 @@ import { resolvePendingHashes } from "@/lib/arcscan";
 export function GET() {
   const txs = listTransactions(20) as Array<{
     id: number;
+    created_at: string;
     payer: string;
     amount_usdc: string;
     tx_hash: string | null;

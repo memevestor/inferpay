@@ -6,8 +6,7 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { getPriceForModel, MODEL_PRICES } from "@/lib/pricing";
 import type { ChatMessage } from "@/lib/llm";
 import { insertTransaction, updateTxHash } from "@/lib/db";
-import { lookupOnchainTxHash } from "@/lib/arcscan";
-import { usdcToAtomic, getUsdcAddress } from "@/lib/nanopay";
+import { lookupSettlementTxHash } from "@/lib/arcscan";
 
 const MERCHANT_ADDRESS = process.env.CIRCLE_WALLET_ADDRESS!;
 
@@ -163,11 +162,10 @@ export async function POST(req: NextRequest) {
     amount_usdc: price,
     tx_hash: payResult.transaction,
   });
-  void (async () => {
-    const usdcAddr = await getUsdcAddress().catch(() => "");
-    const hash = await lookupOnchainTxHash(buyer.address, usdcToAtomic(price), usdcAddr);
+  const createdAt = new Date().toISOString().replace("T", " ").slice(0, 19);
+  void lookupSettlementTxHash(createdAt).then((hash) => {
     if (hash) updateTxHash(txId, hash);
-  })();
+  });
 
   return NextResponse.json(
     {

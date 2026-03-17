@@ -1,57 +1,95 @@
 // ArcScan (Blockscout) API — resolves Circle settlement UUID → real onchain 0x... tx hash
 //
-// Circle batched settlement submits EIP-3009 transferWithAuthorization via their relayer.
-// The token transfer appears at the MERCHANT address (not payer), with from.hash = payer.
-// Batch settlement can take minutes to hours — so we retry for up to ~10 minutes.
+// Circle's relayer submits EIP-3009 transferWithAuthorization on behalf of the buyer.
+// The token transfer appears at the MERCHANT address (not payer), with from.hash == payer.
+// Batch settlement can take minutes to hours — fire-and-forget handles new payments;
+// lazy bulk resolution (called on GET /api/transactions) handles backfilling old ones.
 
 const ARCSCAN_API = "https://testnet.arcscan.app";
 const MERCHANT_ADDRESS = process.env.CIRCLE_WALLET_ADDRESS ?? "";
 
+type ArcTransfer = { txHash: string; value: string; from: string; timestamp: string };
+
+// Fetch one page of USDC token transfers to merchant
+async function fetchMerchantTransfers(): Promise<ArcTransfer[]> {
+  if (!MERCHANT_ADDRESS) return [];
+  const res = await fetch(
+    `${ARCSCAN_API}/api/v2/addresses/${MERCHANT_ADDRESS}/token-transfers?type=ERC-20`
+  ).catch(() => null);
+  if (!res?.ok) return [];
+  const data = await res.json().catch(() => null);
+  if (!data?.items) return [];
+
+  return (data.items as Record<string, unknown>[]).map((item) => ({
+    txHash: (item.transaction_hash as string) ?? "",
+    value: ((item.total as { value?: string })?.value) ?? "",
+    from: ((item.from as { hash?: string })?.hash ?? "").toLowerCase(),
+    timestamp: (item.timestamp as string) ?? "",
+  }));
+}
+
+// Called fire-and-forget after a new payment — waits for batch confirmation then updates DB.
+// Uses exponential backoff since Circle batch may take minutes.
 export async function lookupOnchainTxHash(
   payer: string,
   amountAtomic: string,
-  _usdcAddress: string
+  _usdcAddress: string,
+  skipDelay = false
 ): Promise<string | null> {
-  if (!payer || !amountAtomic || !MERCHANT_ADDRESS) return null;
+  if (!payer || !amountAtomic) return null;
 
-  // Circle batches payments — initial delay before first query
-  await new Promise((r) => setTimeout(r, 5000));
+  if (!skipDelay) {
+    // Initial wait for Arc batch processing (sub-second finality but relayer has queue)
+    await new Promise((r) => setTimeout(r, 5000));
+  }
 
-  // Retry for up to ~10 minutes (6 attempts, doubling interval: 5s, 10s, 20s, 40s, 80s, 160s)
-  let delay = 10_000;
+  let delay = 15_000;
   for (let attempt = 0; attempt < 6; attempt++) {
-    const hash = await queryMerchantTransfers(payer, amountAtomic);
-    if (hash) return hash;
+    const transfers = await fetchMerchantTransfers();
+    const match = transfers.find(
+      (t) => t.from === payer.toLowerCase() && t.value === amountAtomic
+    );
+    if (match?.txHash) return match.txHash;
+
     await new Promise((r) => setTimeout(r, delay));
-    delay = Math.min(delay * 2, 120_000); // cap at 2 minutes between retries
+    delay = Math.min(delay * 2, 180_000); // cap at 3 minutes
   }
 
   return null;
 }
 
-async function queryMerchantTransfers(payer: string, amountAtomic: string): Promise<string | null> {
-  const res = await fetch(
-    `${ARCSCAN_API}/api/v2/addresses/${MERCHANT_ADDRESS}/token-transfers?type=ERC-20`
-  ).catch(() => null);
+// Called from GET /api/transactions to batch-resolve all pending UUID hashes at once.
+// Makes a single ArcScan query and assigns hashes to multiple pending transactions.
+export async function resolvePendingHashes(
+  pending: Array<{ id: number; payer: string; amount_usdc: string }>
+): Promise<Map<number, string>> {
+  const result = new Map<number, string>();
+  if (!pending.length) return result;
 
-  if (!res?.ok) return null;
+  const transfers = await fetchMerchantTransfers().catch(() => []);
+  // Already-assigned hashes track (avoid duplicate assignment within this batch)
+  const used = new Set<string>();
 
-  const data = await res.json().catch(() => null);
-  if (!data) return null;
-
-  const now = Date.now();
-  const match = (data.items ?? []).find((item: Record<string, unknown>) => {
-    const from = item.from as { hash?: string } | undefined;
-    const total = item.total as { value?: string } | undefined;
-    const ts = item.timestamp as string | undefined;
-    return (
-      from?.hash?.toLowerCase() === payer.toLowerCase() &&
-      total?.value === amountAtomic &&
-      ts !== undefined &&
-      now - new Date(ts).getTime() < 7_200_000 // within last 2 hours
+  for (const tx of pending) {
+    const amountAtomic = usdcToAtomicLocal(tx.amount_usdc);
+    const match = transfers.find(
+      (t) =>
+        t.from === tx.payer.toLowerCase() &&
+        t.value === amountAtomic &&
+        !used.has(t.txHash)
     );
-  });
+    if (match?.txHash) {
+      result.set(tx.id, match.txHash);
+      used.add(match.txHash);
+    }
+  }
 
-  if (!match) return null;
-  return (match as { transaction_hash?: string }).transaction_hash ?? null;
+  return result;
+}
+
+// Local copy of usdcToAtomic — avoid circular dependency with nanopay.ts
+function usdcToAtomicLocal(price: string): string {
+  const [whole = "0", frac = ""] = price.split(".");
+  const padded = frac.padEnd(6, "0").slice(0, 6);
+  return (BigInt(whole) * 1_000_000n + BigInt(padded)).toString();
 }

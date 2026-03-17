@@ -54,8 +54,13 @@ export default function Home() {
   useEffect(() => {
     fetchBalance();
     fetchTxLogs();
-    const interval = setInterval(fetchBalance, 15_000);
-    return () => clearInterval(interval);
+    const balanceInterval = setInterval(fetchBalance, 15_000);
+    // Poll tx log every 30s so "settling…" rows flip to real hash links once Circle settles
+    const txInterval = setInterval(fetchTxLogs, 30_000);
+    return () => {
+      clearInterval(balanceInterval);
+      clearInterval(txInterval);
+    };
   }, [fetchBalance, fetchTxLogs]);
 
   async function send() {
@@ -248,17 +253,14 @@ export default function Home() {
                     href={`https://testnet.arcscan.app/tx/${tx.tx_hash}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-emerald-600 hover:text-emerald-400 font-mono text-xs shrink-0 transition-colors"
+                    className="text-emerald-500 hover:text-emerald-400 font-mono text-xs shrink-0 transition-colors"
                     title={tx.tx_hash}
                   >
                     {tx.tx_hash.slice(0, 8)}…{tx.tx_hash.slice(-6)} ↗
                   </a>
                 ) : (
-                  <span
-                    className="text-gray-700 font-mono text-xs shrink-0"
-                    title={tx.tx_hash ?? ""}
-                  >
-                    {tx.tx_hash ? tx.tx_hash.slice(0, 8) + "…" : "—"}
+                  <span className="text-gray-600 text-xs shrink-0" title="Batch settlement pending on-chain">
+                    ⏳ settling
                   </span>
                 )}
                 <span

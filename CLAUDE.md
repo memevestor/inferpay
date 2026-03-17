@@ -27,7 +27,7 @@ inferpay/
 │   ├── api/v1/chat/completions/  # x402 v2 proxy endpoint (production)
 │   ├── api/v1/demo/try/          # Demo endpoint (GatewayClient buyer)
 │   ├── api/v1/demo/balance/      # Demo buyer balances
-│   ├── api/transactions/         # Admin transaction log (x-admin-token required)
+│   ├── api/transactions/         # Public transaction log (read-only, no auth)
 │   ├── api/balance/              # Merchant balance
 │   ├── api/health/               # healthcheck
 │   ├── landing/                  # Landing page (SEPARATE AGENT — do not touch)
@@ -217,6 +217,76 @@ export const MODEL_PRICES: Record<string, string> = {
 - **Arc Testnet**: Circle's L1 blockchain testnet, USDC as native gas token, chainId 5042002
 - **Merchant/Seller**: Our proxy server that sells inference for USDC
 - **Buyer**: AI agent or user that pays for inference via Gateway Wallet
+
+## Deploy
+
+VPS is a **read-only mirror** of the `main` branch. All changes go through the local → GitHub → VPS pipeline. Never make edits directly on the server.
+
+**5 rules:**
+1. Never commit or edit files directly on the VPS — local machine only
+2. One task = one deploy: build locally → verify → push to GitHub → pull on VPS → restart PM2
+3. Always run `npm run build` locally before pushing — catch TypeScript errors before they hit production
+4. After `pm2 restart`, verify with `curl https://ipayx402.xyz/api/health` — if not 200, check `pm2 logs inferpay --lines 50`
+5. `.env.local` on VPS is the source of truth for secrets — never overwrite it during deploy (`.env.local` is gitignored)
+
+**Deploy sequence:**
+```bash
+# Local:
+npm run build          # must pass clean
+git push
+
+# VPS (ssh root@157.173.110.229):
+cd /var/www/inferpay
+git pull
+npm run build
+pm2 restart inferpay
+```
+
+---
+
+## Security
+
+Checks to run before every deploy and after any dependency update:
+
+**Secrets / credentials:**
+- `.env.local` must be in `.gitignore` — verify: `git check-ignore .env.local` must return the filename
+- Scan for accidentally committed secrets: `git log --all --full-history -- .env.local` must be empty
+- Never hardcode API keys, private keys, or passwords in source files — use `process.env.*` only
+- `ADMIN_TOKEN`, `CIRCLE_API_KEY`, `CIRCLE_ENTITY_SECRET`, `DEMO_BUYER_PRIVATE_KEY` must NEVER appear in git history
+- Check GitHub repo is private: Settings → Visibility. This project has VPS credentials in `.env.local`
+
+**VPS open ports:**
+- Only ports 22 (SSH), 80 (HTTP redirect), 443 (HTTPS) should be publicly accessible
+- Verify: `ss -tlnp` on VPS — port 3000 (Next.js) must NOT be exposed externally (nginx proxies it)
+- Check firewall: `ufw status` — should show only 22/80/443 allowed
+
+**API surface:**
+- `/api/transactions` is intentionally public (blockchain data) — only payer address, model, amount, tx hash. No private data
+- `/api/v1/demo/try` is rate-limited (5 req/min per IP) — prevents demo wallet drain
+- `/api/v1/chat/completions` is rate-limited (60 req/min per IP) — prevents spam on the 402 path
+- No admin endpoints are publicly accessible without `ADMIN_TOKEN`
+
+**Dependencies:**
+- Run `npm audit` periodically — pay attention to high/critical severity in `@circle-fin/*` and `next`
+- `DEMO_BUYER_PRIVATE_KEY` controls a real funded EOA — treat as a hot wallet secret
+
+**WARNING section** — before any change, check if it:
+- Exposes a new unauthenticated endpoint that could drain the demo wallet
+- Adds a new `process.env.*` variable that might be logged or returned in error responses
+- Modifies rate limiting — removing or weakening limits on payment endpoints is a security risk
+- Changes the `settlePayment` / `verifyPayment` flow — any bypass here means free LLM calls
+
+---
+
+## Recent Changes
+
+**2026-03-18 — Settlement tx hash resolution (submitBatch approach):**
+- `lib/arcscan.ts` rewritten: instead of searching for ERC-20 token transfers (which don't exist in Circle Nanopayments), now queries the Gateway Wallet contract (`0x0077777...`) for `submitBatch()` transactions. The first `submitBatch` after a payment's timestamp IS the onchain settlement proof.
+- `lookupSettlementTxHash(createdAt)` — waits 6 min then finds the batch. `resolvePendingHashes(pending)` — bulk-resolves all UUID hashes when `/api/transactions` is loaded.
+- `/api/transactions` made public (removed `x-admin-token` requirement) — was causing empty Transactions Log in the UI.
+- UI: removed misleading payer address link (showed unrelated old txs), added `⏳ settling` → `0x...↗` ArcScan link once hash resolves. Auto-polls every 30s.
+
+---
 
 ## Docs & References
 

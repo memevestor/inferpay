@@ -1,9 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { MODEL_PRICES } from "@/lib/pricing";
-
-const MODELS = Object.keys(MODEL_PRICES);
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { SUPPORTED_MODELS, MODEL_PRICING, calculatePrice, getDefaultPrice } from "@/lib/pricing";
+import { estimateTokens } from "@/lib/tokens";
 
 type Message = { role: "user" | "assistant"; content: string };
 type PayStep = "idle" | "sending" | "got402" | "retrying" | "done" | "error";
@@ -16,6 +15,8 @@ type TxRow = {
   amount_usdc: string;
   tx_hash: string | null;
   status: string;
+  tokens_input: number | null;
+  tokens_output: number | null;
 };
 
 const STEP_LABELS: Record<PayStep, string> = {
@@ -28,7 +29,7 @@ const STEP_LABELS: Record<PayStep, string> = {
 };
 
 export default function Home() {
-  const [model, setModel] = useState(MODELS[0]);
+  const [model, setModel] = useState(SUPPORTED_MODELS[0]);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
@@ -36,7 +37,19 @@ export default function Home() {
   const [txLogs, setTxLogs] = useState<TxRow[]>([]);
   const [balance, setBalance] = useState<string | null>(null);
 
-  const price = MODEL_PRICES[model];
+  // Estimate price dynamically based on current input + conversation history
+  const estimatedPrice = useMemo(() => {
+    if (!input.trim()) return getDefaultPrice(model);
+    const allMessages: Message[] = [
+      ...messages,
+      { role: "user", content: input },
+    ];
+    const inputTokens = estimateTokens(
+      allMessages.map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content }))
+    );
+    const maxOut = MODEL_PRICING[model].maxOutputDefault;
+    return calculatePrice(model, inputTokens, maxOut);
+  }, [input, messages, model]);
 
   const fetchBalance = useCallback(async () => {
     const res = await fetch("/api/balance");
@@ -139,12 +152,15 @@ export default function Home() {
           onChange={(e) => { setModel(e.target.value); setPayStep("idle"); }}
           className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm flex-1"
         >
-          {MODELS.map((m) => (
+          {SUPPORTED_MODELS.map((m) => (
             <option key={m} value={m}>{m}</option>
           ))}
         </select>
-        <span className="text-xs bg-emerald-900 text-emerald-300 px-2 py-1 rounded font-mono whitespace-nowrap">
-          {price} USDC / req
+        <span
+          className="text-xs bg-emerald-900 text-emerald-300 px-2 py-1 rounded font-mono whitespace-nowrap"
+          title={`~${MODEL_PRICING[model].maxOutputDefault} output tokens budget`}
+        >
+          ~{estimatedPrice} USDC
         </span>
         {payStep !== "idle" && (
           <span className={`text-xs px-2 py-1 rounded font-mono whitespace-nowrap ${stepColor[payStep]}`}>
@@ -204,7 +220,7 @@ export default function Home() {
           disabled={loading}
           className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 px-4 py-2 rounded text-sm font-medium whitespace-nowrap"
         >
-          {loading ? "…" : `Pay & Ask · ${price} USDC`}
+          {loading ? "…" : `Pay & Ask · ~${estimatedPrice} USDC`}
         </button>
       </div>
 
@@ -236,6 +252,11 @@ export default function Home() {
                 <span className="text-emerald-400 font-mono shrink-0">
                   {tx.amount_usdc} USDC
                 </span>
+                {(tx.tokens_input != null || tx.tokens_output != null) && (
+                  <span className="text-gray-600 font-mono shrink-0" title="tokens in → tokens out">
+                    {tx.tokens_input ?? "?"}→{tx.tokens_output ?? "?"}tok
+                  </span>
+                )}
                 <span className="text-gray-400 truncate flex-1">
                   {tx.model.split("/")[1] ?? tx.model}
                 </span>

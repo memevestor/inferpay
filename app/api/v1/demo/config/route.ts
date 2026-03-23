@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { peekRateLimit } from "@/lib/rate-limit";
-import { MODEL_PRICES } from "@/lib/pricing";
+import { MODEL_PRICING } from "@/lib/pricing";
 
 const DEMO_MODELS = [
   "meta-llama/llama-3.1-70b-instruct",
@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
       remaining,
       limit: LIMIT,
       window_seconds: WINDOW_MS / 1000,
-      models: DEMO_MODELS.filter((m) => m in MODEL_PRICES),
+      models: DEMO_MODELS.filter((m) => m in MODEL_PRICING),
     },
     { headers: { "Access-Control-Allow-Origin": "*" } }
   );

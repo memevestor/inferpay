@@ -3,7 +3,8 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { GatewayClient } from "@circle-fin/x402-batching/client";
 import { checkRateLimit } from "@/lib/rate-limit";
-import { getPriceForModel, MODEL_PRICES } from "@/lib/pricing";
+import { calculatePrice, SUPPORTED_MODELS, MODEL_PRICING } from "@/lib/pricing";
+import { estimateTokens } from "@/lib/tokens";
 import type { ChatMessage } from "@/lib/llm";
 import { insertTransaction, updateTxHash } from "@/lib/db";
 import { lookupSettlementTxHash } from "@/lib/arcscan";
@@ -55,9 +56,9 @@ export async function POST(req: NextRequest) {
 
   const { model, messages } = body as { model: string; messages: ChatMessage[] };
 
-  if (typeof model !== "string" || !(model in MODEL_PRICES)) {
+  if (typeof model !== "string" || !SUPPORTED_MODELS.includes(model)) {
     return NextResponse.json(
-      { error: `Unknown model. Valid: ${Object.keys(MODEL_PRICES).join(", ")}` },
+      { error: `Unknown model. Valid: ${SUPPORTED_MODELS.join(", ")}` },
       { status: 400 }
     );
   }
@@ -74,7 +75,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const price = getPriceForModel(model);
+  // Dynamic per-token price — must match what /completions will charge
+  const inputTokens = estimateTokens(messages);
+  const maxOut = MODEL_PRICING[model].maxOutputDefault;
+  const price = calculatePrice(model, inputTokens, maxOut);
+
   const steps: object[] = [];
   const startMs = Date.now();
 
@@ -86,6 +91,7 @@ export async function POST(req: NextRequest) {
     timestamp: new Date().toISOString(),
     data: {
       amount_usdc: price,
+      tokens_input_estimate: inputTokens,
       payTo: MERCHANT_ADDRESS,
     },
   });
@@ -110,7 +116,7 @@ export async function POST(req: NextRequest) {
 
   type OpenAIResponse = {
     choices?: { message?: { content?: string } }[];
-    usage?: { total_tokens?: number };
+    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
   };
 
   let payResult: Awaited<ReturnType<typeof buyer.pay<OpenAIResponse>>>;
@@ -143,14 +149,16 @@ export async function POST(req: NextRequest) {
   // ── Step 3: LLM response ─────────────────────────────────────────────────
   const llmJson = payResult.data;
   const llmResponse = llmJson?.choices?.[0]?.message?.content ?? "(no response)";
-  const tokensUsed = llmJson?.usage?.total_tokens ?? 0;
+  const tokensInput = llmJson?.usage?.prompt_tokens ?? inputTokens;
+  const tokensOutput = llmJson?.usage?.completion_tokens;
+  const tokensTotal = llmJson?.usage?.total_tokens ?? 0;
 
   steps.push({
     step: "response",
     description: "LLM inference delivered",
     status: payResult.status,
     timestamp: new Date().toISOString(),
-    data: { model, tokens_used: tokensUsed },
+    data: { model, tokens_input: tokensInput, tokens_output: tokensOutput, tokens_total: tokensTotal },
   });
 
   const totalMs = Date.now() - startMs;
@@ -161,6 +169,8 @@ export async function POST(req: NextRequest) {
     model,
     amount_usdc: price,
     tx_hash: payResult.transaction,
+    tokens_input: tokensInput,
+    tokens_output: tokensOutput,
   });
   const createdAt = new Date().toISOString().replace("T", " ").slice(0, 19);
   void lookupSettlementTxHash(createdAt).then((hash) => {
@@ -173,6 +183,8 @@ export async function POST(req: NextRequest) {
       llm_response: llmResponse,
       total_time_ms: totalMs,
       price_usdc: price,
+      tokens_input: tokensInput,
+      tokens_output: tokensOutput,
       tx_hash: payResult.transaction,
       mode: "demo",
       note: "This demo used a pre-funded testnet Gateway wallet. In production, YOUR agent pays.",

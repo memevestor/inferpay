@@ -1,7 +1,8 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { getPriceForModel, MODEL_PRICES } from "@/lib/pricing";
+import { calculatePrice, SUPPORTED_MODELS, MODEL_PRICING } from "@/lib/pricing";
+import { estimateTokens } from "@/lib/tokens";
 import {
   buildPaymentRequirements,
   build402ResponseBody,
@@ -13,6 +14,7 @@ import { proxyToOpenRouter } from "@/lib/llm";
 import { insertTransaction, updateTxHash } from "@/lib/db";
 import { lookupSettlementTxHash } from "@/lib/arcscan";
 import { checkRateLimit } from "@/lib/rate-limit";
+import type { ChatMessage } from "@/lib/llm";
 
 const MERCHANT_ADDRESS = process.env.CIRCLE_WALLET_ADDRESS!;
 
@@ -60,14 +62,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "model must be a string" }, { status: 400 });
   }
 
-  if (!(model in MODEL_PRICES)) {
+  if (!SUPPORTED_MODELS.includes(model)) {
     return NextResponse.json(
-      { error: `Unknown model. Supported: ${Object.keys(MODEL_PRICES).join(", ")}` },
+      { error: `Unknown model. Supported: ${SUPPORTED_MODELS.join(", ")}` },
       { status: 400 }
     );
   }
 
-  const price = getPriceForModel(model);
+  // Dynamic per-token pricing: count input tokens now, use max_tokens cap for output budget
+  const inputTokens = estimateTokens(messages as ChatMessage[]);
+  const maxOut =
+    typeof max_tokens === "number" && max_tokens > 0
+      ? max_tokens
+      : MODEL_PRICING[model].maxOutputDefault;
+  const price = calculatePrice(model, inputTokens, maxOut);
+
   const requirements = await buildPaymentRequirements(price, MERCHANT_ADDRESS);
 
   const parsed = extractPaymentHeader(req.headers);
@@ -118,12 +127,33 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "LLM unavailable" }, { status: 502 });
   }
 
-  // Step 5: log transaction
+  const upstream = llmResult.data;
+
+  // Step 5: extract actual token usage and log transaction.
+  // For streaming responses we can't read the body here — log without output tokens.
+  let tokensOutput: number | undefined;
+  let responseBody: BodyInit = upstream.body!;
+
+  if (stream !== true) {
+    try {
+      const json = await upstream.json() as {
+        choices?: unknown[];
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
+      };
+      tokensOutput = json.usage?.completion_tokens;
+      responseBody = JSON.stringify(json);
+    } catch {
+      // If JSON parse fails, pass body as-is (will be empty though)
+    }
+  }
+
   const txId = insertTransaction({
     payer: settleResult.payer,
     model,
     amount_usdc: price,
     tx_hash: settleResult.transaction,
+    tokens_input: inputTokens,
+    tokens_output: tokensOutput,
   });
 
   // Async: wait for next submitBatch cycle (~5 min) then resolve UUID → real onchain 0x hash
@@ -132,7 +162,6 @@ export async function POST(req: NextRequest) {
     if (hash) updateTxHash(txId, hash);
   });
 
-  const upstream = llmResult.data;
   const responseHeaders = new Headers();
   responseHeaders.set("Content-Type", upstream.headers.get("Content-Type") ?? "application/json");
   responseHeaders.set("Access-Control-Allow-Origin", "*");
@@ -142,7 +171,7 @@ export async function POST(req: NextRequest) {
     Buffer.from(JSON.stringify({ transaction: settleResult.transaction })).toString("base64")
   );
 
-  return new NextResponse(upstream.body, {
+  return new NextResponse(responseBody, {
     status: upstream.status,
     headers: responseHeaders,
   });

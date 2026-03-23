@@ -16,15 +16,20 @@ function openDb(): any | null {
   database.exec("PRAGMA journal_mode = WAL");
   database.exec(`
     CREATE TABLE IF NOT EXISTS transactions (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
-      payer       TEXT    NOT NULL,
-      model       TEXT    NOT NULL,
-      amount_usdc TEXT    NOT NULL,
-      tx_hash     TEXT,
-      status      TEXT    NOT NULL DEFAULT 'confirmed'
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+      payer         TEXT    NOT NULL,
+      model         TEXT    NOT NULL,
+      amount_usdc   TEXT    NOT NULL,
+      tx_hash       TEXT,
+      status        TEXT    NOT NULL DEFAULT 'confirmed',
+      tokens_input  INTEGER,
+      tokens_output INTEGER
     )
   `);
+  // Migrate existing DBs: add token columns if they don't exist yet
+  try { database.exec("ALTER TABLE transactions ADD COLUMN tokens_input INTEGER"); } catch { /* already exists */ }
+  try { database.exec("ALTER TABLE transactions ADD COLUMN tokens_output INTEGER"); } catch { /* already exists */ }
   return database;
 }
 
@@ -36,14 +41,24 @@ export type TxRecord = {
   amount_usdc: string;
   tx_hash?: string;
   status?: string;
+  tokens_input?: number;
+  tokens_output?: number;
 };
 
 export function insertTransaction(rec: TxRecord): number {
   if (!db) return -1;
   const result = db.prepare(
-    `INSERT INTO transactions (payer, model, amount_usdc, tx_hash, status)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(rec.payer, rec.model, rec.amount_usdc, rec.tx_hash ?? null, rec.status ?? "confirmed");
+    `INSERT INTO transactions (payer, model, amount_usdc, tx_hash, status, tokens_input, tokens_output)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    rec.payer,
+    rec.model,
+    rec.amount_usdc,
+    rec.tx_hash ?? null,
+    rec.status ?? "confirmed",
+    rec.tokens_input ?? null,
+    rec.tokens_output ?? null,
+  );
   return Number(result.lastInsertRowid);
 }
 

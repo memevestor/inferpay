@@ -280,6 +280,16 @@ Checks to run before every deploy and after any dependency update:
 
 ## Recent Changes
 
+**2026-03-23 — Per-token pricing (stage 3):**
+- `lib/tokens.ts` (new): `estimateTokens(messages)` — 4 chars/token + 4 overhead/msg + 20% safety margin. No external deps.
+- `lib/pricing.ts` rewritten: `MODEL_PRICING` with `inputPer1K`/`outputPer1K` rates per model. `calculatePrice(model, inputTokens, maxOutputTokens)` returns USDC string via bigint (no float). `getDefaultPrice(model)` for UI badge (~200 input tokens). `SUPPORTED_MODELS` replaces `MODEL_PRICES`.
+- `lib/db.ts`: added `tokens_input`/`tokens_output` INTEGER columns; `ALTER TABLE` migration wrapped in try/catch for existing DBs.
+- `/api/v1/chat/completions`: price calculated from `estimateTokens` + `max_tokens` cap BEFORE 402. After LLM response, actual `completion_tokens` logged (non-streaming only).
+- `/api/v1/demo/try`: same dynamic pricing; actual `prompt_tokens`/`completion_tokens` from OpenRouter `usage` field logged to DB.
+- `/api/v1/demo/config`: fixed broken import (`MODEL_PRICES` → `MODEL_PRICING`).
+- `app/page.tsx`: price badge recalculates live on every keystroke via `useMemo`; Transaction Log shows `{input}→{output}tok` column.
+- Pricing formula: `price = (inputTokens × inputPer1K / 1000) + (maxOutputTokens × outputPer1K / 1000)`, floor at `MIN_PRICE = 0.0001 USDC`.
+
 **2026-03-18 — Settlement tx hash resolution (submitBatch approach):**
 - `lib/arcscan.ts` rewritten: instead of searching for ERC-20 token transfers (which don't exist in Circle Nanopayments), now queries the Gateway Wallet contract (`0x0077777...`) for `submitBatch()` transactions. The first `submitBatch` after a payment's timestamp IS the onchain settlement proof.
 - `lookupSettlementTxHash(createdAt)` — waits 6 min then finds the batch. `resolvePendingHashes(pending)` — bulk-resolves all UUID hashes when `/api/transactions` is loaded.
